@@ -3,7 +3,7 @@ import { EventEmitter, Injectable } from '@angular/core'
 import { FormControl } from '@angular/forms'
 
 import _ from 'lodash'
-import { catchError, mergeMap, tap, throwError, timer } from 'rxjs'
+import { catchError, forkJoin, map, mergeMap, tap, throwError, timer } from 'rxjs'
 import { Difficulty, Instrument } from 'scan-chart'
 import { environment } from 'src-angular/environments/environment'
 import { AdvancedSearch, ChartData, SearchResult } from 'src-shared/interfaces/search.interface'
@@ -30,7 +30,7 @@ export class SearchService {
 	public availableIcons: string[]
 
 	public searchControl = new FormControl('', { nonNullable: true })
-	public instrument: FormControl<Instrument | null>
+	public instruments: FormControl<(Instrument | null)[]>
 	public difficulty: FormControl<Difficulty | null>
 	public drumType: FormControl<DrumTypeName | null>
 	public drumsReviewed: FormControl<boolean>
@@ -40,15 +40,34 @@ export class SearchService {
 	constructor(
 		private http: HttpClient,
 	) {
-		this.instrument = new FormControl<Instrument>(
-			(localStorage.getItem('instrument') === 'null' ? null : localStorage.getItem('instrument')) as Instrument
-		)
-		this.instrument.valueChanges.subscribe(instrument => {
-			localStorage.setItem('instrument', `${instrument}`)
-			if (this.songsResponse.page) {
-				this.search(this.searchControl.value || '*').subscribe()
+		// For backward compatibility - read old single instrument setting
+		const savedInstrument = localStorage.getItem('instrument');
+		let initialInstruments: (Instrument | null)[] = [null];
+		
+		if (savedInstrument && savedInstrument !== 'null') {
+			initialInstruments = [savedInstrument as Instrument];
+		}
+		
+		// Try to read the new instruments array if it exists
+		const savedInstruments = localStorage.getItem('instruments');
+		if (savedInstruments) {
+			try {
+				initialInstruments = JSON.parse(savedInstruments) as (Instrument | null)[];
+				if (!Array.isArray(initialInstruments) || initialInstruments.length === 0) {
+					initialInstruments = [null];
+				}
+			} catch (e) {
+				initialInstruments = [null];
 			}
-		})
+		}
+		
+		this.instruments = new FormControl<(Instrument | null)[]>(initialInstruments);
+		this.instruments.valueChanges.subscribe(instruments => {
+			localStorage.setItem('instruments', JSON.stringify(instruments));
+			if (this.songsResponse.page) {
+				this.search(this.searchControl.value || '*').subscribe();
+			}
+		});
 
 		this.difficulty = new FormControl<Difficulty>(
 			(localStorage.getItem('difficulty') === 'null' ? null : localStorage.getItem('difficulty')) as Difficulty
@@ -95,22 +114,93 @@ export class SearchService {
 	 * Leave the search term blank to fetch the songs with charts most recently added.
 	 */
 	public search(search = '*', nextPage = false) {
-		this.searchLoading = true
-		this.isDefaultSearch = search === '*'
-		this.isAdvancedSearch = false
+		this.searchLoading = true;
+		this.isDefaultSearch = search === '*';
+		this.isAdvancedSearch = false;
 
 		if (nextPage) {
-			this.currentPage++
+			this.currentPage++;
 		} else {
-			this.currentPage = 1
+			this.currentPage = 1;
 		}
 
-		let retries = 10
+		const selectedInstruments = this.instruments.value || [null];
+
+		// If "Any" is selected or the array is empty, just do a normal search with null instrument
+		if (selectedInstruments.includes(null) || selectedInstruments.length === 0) {
+			return this.searchWithInstrument(search, null, nextPage);
+		}
+
+		// If there's only one instrument selected, use it directly
+		if (selectedInstruments.length === 1) {
+			return this.searchWithInstrument(search, selectedInstruments[0], nextPage);
+		}
+
+		// For multiple instruments, we need to perform multiple searches and combine results
+		const searches = selectedInstruments.map(instrument => {
+			return this.searchWithInstrument(search, instrument, nextPage, true);
+		});
+
+		return forkJoin(searches).pipe(
+			map(results => {
+				// Combine all results
+				let combinedData: ChartData[] = [];
+				let totalFound = 0;
+
+				results.forEach(result => {
+					combinedData = [...combinedData, ...result.data];
+					totalFound += result.found;
+				});
+
+				// Remove duplicates based on chartId
+				const uniqueData = _.uniqBy(combinedData, 'chartId');
+
+				// Create a combined result
+				const combinedResult: SearchResult = {
+					data: uniqueData,
+					found: uniqueData.length,
+					page: this.currentPage,
+					pages: Math.ceil(uniqueData.length / resultsPerPage),
+					per_page: resultsPerPage,
+				};
+
+				// Process the combined result
+				this.searchLoading = false;
+
+				if (!nextPage) {
+					this.groupedSongs = [];
+				}
+
+				this.songsResponse = combinedResult;
+
+				this.groupedSongs.push(
+					..._.chain(combinedResult.data)
+						.groupBy(c => c.songId ?? -1 * c.chartId)
+						.values()
+						.value()
+				);
+
+				if (nextPage) {
+					this.updateSearch.emit(combinedResult);
+				} else {
+					this.newSearch.emit(combinedResult);
+				}
+
+				return combinedResult;
+			})
+		);
+	}
+
+	/**
+	 * Helper method to search with a specific instrument
+	 */
+	private searchWithInstrument(search = '*', instrument: Instrument | null, nextPage = false, internal = false) {
+		let retries = 10;
 		return this.http.post<SearchResult>(`${environment.apiUrl}/search`, {
 			search,
 			per_page: resultsPerPage,
 			page: this.currentPage,
-			instrument: this.instrument.value,
+			instrument: instrument,
 			difficulty: this.difficulty.value,
 			drumType: this.drumType.value,
 			drumsReviewed: this.drumsReviewed.value,
@@ -119,57 +209,142 @@ export class SearchService {
 		}).pipe(
 			catchError((err, caught) => {
 				if (err.status === 400 || retries-- <= 0) {
-					this.searchLoading = false
-					console.log(err)
-					return throwError(() => err)
+					this.searchLoading = false;
+					console.log(err);
+					return throwError(() => err);
 				} else {
-					return timer(2000).pipe(mergeMap(() => caught))
+					return timer(2000).pipe(mergeMap(() => caught));
 				}
 			}),
 			tap(response => {
-				this.searchLoading = false
+				// Only update the UI state if this is not an internal call (part of a multi-instrument search)
+				if (!internal) {
+					this.searchLoading = false;
 
-				if (!nextPage) {
-					// Don't reload results if they are the same
-					if (this.groupedSongs
-						&& _.xorBy(this.songsResponse!.data, response.data, r => r.chartId).length === 0
-						&& this.songsResponse!.found === response.found) {
-						return
+					if (!nextPage) {
+						// Don't reload results if they are the same
+						if (
+							this.groupedSongs &&
+							_.xorBy(this.songsResponse!.data, response.data, r => r.chartId).length === 0 &&
+							this.songsResponse!.found === response.found
+						) {
+							return;
+						} else {
+							this.groupedSongs = [];
+						}
+					}
+					
+					this.songsResponse = response;
+
+					this.groupedSongs.push(
+						..._.chain(response.data)
+							.groupBy(c => c.songId ?? -1 * c.chartId)
+							.values()
+							.value()
+					);
+
+					if (nextPage) {
+						this.updateSearch.emit(response);
 					} else {
-						this.groupedSongs = []
+						this.newSearch.emit(response);
 					}
 				}
-				this.songsResponse = response
-
-				this.groupedSongs.push(
-					..._.chain(response.data)
-						.groupBy(c => c.songId ?? -1 * c.chartId)
-						.values()
-						.value()
-				)
-
-				if (nextPage) {
-					this.updateSearch.emit(response)
-				} else {
-					this.newSearch.emit(response)
-				}
 			})
-		)
+		);
 	}
 
 	public advancedSearch(search: AdvancedSearch, nextPage = false) {
-		this.searchLoading = true
-		this.isDefaultSearch = false
-		this.isAdvancedSearch = true
-		this.lastAdvancedSearch = search
+		this.searchLoading = true;
+		this.isDefaultSearch = false;
+		this.isAdvancedSearch = true;
+		this.lastAdvancedSearch = search;
 
 		if (nextPage) {
-			this.currentPage++
+			this.currentPage++;
 		} else {
-			this.currentPage = 1
+			this.currentPage = 1;
 		}
 
-		let retries = 10
+		const selectedInstruments = search.instruments || [null];
+		
+		// If "Any" is selected or the array is empty, just do a normal search with null instrument
+		if (selectedInstruments.includes(null) || selectedInstruments.length === 0) {
+			const modifiedSearch = { ...search, instrument: null };
+			delete modifiedSearch.instruments;
+			return this.advancedSearchWithInstrument(modifiedSearch, nextPage);
+		}
+
+		// If there's only one instrument selected, use it directly
+		if (selectedInstruments.length === 1) {
+			const modifiedSearch = { ...search, instrument: selectedInstruments[0] };
+			delete modifiedSearch.instruments;
+			return this.advancedSearchWithInstrument(modifiedSearch, nextPage);
+		}
+
+		// For multiple instruments, we need to perform multiple searches and combine results
+		const searches = selectedInstruments.map(instrument => {
+			const modifiedSearch = { ...search, instrument };
+			delete modifiedSearch.instruments;
+			return this.advancedSearchWithInstrument(modifiedSearch, nextPage, true);
+		});
+
+		return forkJoin(searches).pipe(
+			map(results => {
+				// Combine all results
+				let combinedData: ChartData[] = [];
+				let totalFound = 0;
+
+				results.forEach(result => {
+					combinedData = [...combinedData, ...result.data];
+					totalFound += result.found;
+				});
+
+				// Remove duplicates based on chartId
+				const uniqueData = _.uniqBy(combinedData, 'chartId');
+
+				// Create a combined result
+				const combinedResult = {
+					data: uniqueData,
+					found: uniqueData.length
+				};
+
+				// Process the combined result
+				this.searchLoading = false;
+
+				if (!nextPage) {
+					this.groupedSongs = [];
+				}
+
+				this.songsResponse = {
+					...combinedResult,
+					page: this.currentPage,
+					pages: Math.ceil(combinedResult.found / resultsPerPage),
+					per_page: resultsPerPage
+				};
+
+				this.groupedSongs.push(
+					..._.chain(combinedResult.data)
+						.groupBy(c => c.songId ?? -1 * c.chartId)
+						.values()
+						.value()
+				);
+
+				if (nextPage) {
+					this.updateSearch.emit(combinedResult);
+				} else {
+					this.newSearch.emit(combinedResult);
+				}
+
+				return combinedResult;
+			})
+		);
+	}
+
+	/**
+	 * Helper method to perform advanced search with a specific instrument
+	 */
+	private advancedSearchWithInstrument(search: AdvancedSearch, nextPage = false, internal = false) {
+		let retries = 10;
 		return this.http.post<{ data: SearchResult['data']; found: number }>(`${environment.apiUrl}/search/advanced`, {
 			per_page: resultsPerPage,
 			page: this.currentPage,
@@ -177,43 +352,48 @@ export class SearchService {
 		}).pipe(
 			catchError((err, caught) => {
 				if (err.status === 400 || retries-- <= 0) {
-					this.searchLoading = false
-					console.log(err)
-					return throwError(() => err)
+					this.searchLoading = false;
+					console.log(err);
+					return throwError(() => err);
 				} else {
-					return timer(2000).pipe(mergeMap(() => caught))
+					return timer(2000).pipe(mergeMap(() => caught));
 				}
 			}),
 			tap(response => {
-				this.searchLoading = false
+				// Only update the UI state if this is not an internal call (part of a multi-instrument search)
+				if (!internal) {
+					this.searchLoading = false;
 
-				if (!nextPage) {
-					// Don't reload results if they are the same
-					if (this.groupedSongs
-						&& _.xorBy(this.songsResponse!.data, response.data, r => r.chartId).length === 0
-						&& this.songsResponse!.found === response.found) {
-						return
+					if (!nextPage) {
+						// Don't reload results if they are the same
+						if (
+							this.groupedSongs &&
+							_.xorBy(this.songsResponse!.data, response.data, r => r.chartId).length === 0 &&
+							this.songsResponse!.found === response.found
+						) {
+							return;
+						} else {
+							this.groupedSongs = [];
+						}
+					}
+
+					this.songsResponse = response;
+
+					this.groupedSongs.push(
+						..._.chain(response.data)
+							.groupBy(c => c.songId ?? -1 * c.chartId)
+							.values()
+							.value()
+					);
+
+					if (nextPage) {
+						this.updateSearch.emit(response);
 					} else {
-						this.groupedSongs = []
+						this.newSearch.emit(response);
 					}
 				}
-
-				this.songsResponse = response
-
-				this.groupedSongs.push(
-					..._.chain(response.data)
-						.groupBy(c => c.songId ?? -1 * c.chartId)
-						.values()
-						.value()
-				)
-
-				if (nextPage) {
-					this.updateSearch.emit(response)
-				} else {
-					this.newSearch.emit(response)
-				}
 			})
-		)
+		);
 	}
 
 	public getNextSearchPage() {
