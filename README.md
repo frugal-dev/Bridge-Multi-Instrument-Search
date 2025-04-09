@@ -9,7 +9,7 @@
 
 This is the desktop version of [Chorus Encore](https://www.enchor.us/).
 
-This specific fork is made for my own uses that allows multiple instrument search. For example, pro drums + guitar specifically. 
+This specific fork is made for my own uses that allows multiple instrument search. For example, pro drums + guitar specifically. This branch was created with version v3.4.0 from the source. 
 
 
 ### Original Dev Socials
