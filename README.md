@@ -9,39 +9,10 @@
 
 This is the desktop version of [Chorus Encore](https://www.enchor.us/).
 
-## Setup
+This specific fork is made for my own uses that allows multiple instrument search. For example, pro drums + guitar specifically. 
 
-Head over to the [Releases](https://github.com/Geomitron/Bridge/releases) page to download the install wizard. (Windows 10/11, Mac, and Linux versions are available)
 
-## Features
-
-- ✅ Find all charts that can be found on Chorus Encore.
-- ✅ Download any chart directly into your chart library as a chart folder or `.sng` file.
-- ✅ Multi-select songs to add to the download queue.
-- ✅ Cancel and retry downloads.
-- ✅ In-app update checking and downloading.
-- ✅ A variety of themes.
-- ✅ Advanced song search.
-- ✅ Chart issue scanner (for people making charts).
-
-### What's new in v3.4.0
-
-- Add new "Quality Reviewed" filter for drum charts
-
-### Development
-
-Built using Node.js, Angular, and Electron.
-
-Learn how to install Node.js [here](https://nodejs.dev/en/download/)
-
-After installing Node.js and cloning the repository, install dependencies and run development with:
-
-```
-$ npm install -g pnpm
-$ pnpm install && pnpm start
-```
-
-### Socials
+### Original Dev Socials
 
 To discuss the project and make suggestions, please join the [Discord](https://discord.gg/cqaUXGm)
 
