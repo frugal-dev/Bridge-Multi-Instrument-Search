@@ -17,18 +17,24 @@
 			<!-- Instrument Dropdown -->
 			<div class="dropdown">
 				<label tabindex="0" class="btn btn-neutral rounded-btn rounded-r-none uppercase">
-					@if (instrument) {
-						<img class="w-8 hidden sm:block" src="https://static.enchor.us/instrument-{{ instrument }}.png" />
+					@if (selectedInstruments.length === 1) {
+						@if (selectedInstruments[0]) {
+							<img class="w-8 hidden sm:block" src="https://static.enchor.us/instrument-{{ selectedInstruments[0] }}.png" />
+						}
+						{{ instrumentDisplay(selectedInstruments[0]) }}
+					} @else {
+						{{ selectedInstruments.length }} Instruments
 					}
-					{{ instrumentDisplay(instrument) }}
 				</label>
 				<ul tabindex="0" class="menu dropdown-content z-[2] p-2 shadow bg-neutral text-neutral-content rounded-box w-64">
 					<li>
-						<a (click)="setInstrument(null, $event)">{{ instrumentDisplay(null) }}</a>
+						<a (click)="toggleInstrument(null, $event)" [class.bg-primary-content]="isInstrumentSelected(null)">
+							{{ instrumentDisplay(null) }}
+						</a>
 					</li>
 					@for (instrument of instruments; track $index) {
 						<li>
-							<a (click)="setInstrument(instrument, $event)">
+							<a (click)="toggleInstrument(instrument, $event)" [class.bg-primary-content]="isInstrumentSelected(instrument)">
 								<img class="w-8" src="https://static.enchor.us/instrument-{{ instrument }}.png" />
 								{{ instrumentDisplay(instrument) }}
 							</a>
@@ -38,7 +44,7 @@
 			</div>
 			<!-- Difficulty Dropdown -->
 			<div class="dropdown">
-				<label tabindex="0" class="btn btn-neutral rounded-btn rounded-l-none uppercase" [class.rounded-r-none]="instrument === 'drums'">{{
+				<label tabindex="0" class="btn btn-neutral rounded-btn rounded-l-none uppercase" [class.rounded-r-none]="selectedInstruments.includes('drums')">{{
 					difficultyDisplay(difficulty)
 				}}</label>
 				<ul tabindex="0" class="menu dropdown-content z-[2] p-2 shadow bg-neutral text-neutral-content rounded-box w-40">
@@ -52,7 +58,7 @@
 					}
 				</ul>
 			</div>
-			@if (instrument === 'drums') {
+			@if (selectedInstruments.includes('drums')) {
 				<!-- Drum Type Dropdown -->
 				<div class="dropdown">
 					<label tabindex="0" class="btn btn-neutral rounded-btn rounded-l-none rounded-r-none uppercase">{{ drumTypeDisplay(drumType) }}</label>
