@@ -53,7 +53,7 @@ export class SearchBarComponent implements OnInit, AfterViewInit {
 	ngAfterViewInit() {
 		this.searchInput.nativeElement.focus()
 		this.updateDisabledControls()
-		this.searchService.instrument.valueChanges.subscribe(() => {
+		this.searchService.instruments.valueChanges.subscribe(() => {
 			this.updateDisabledControls()
 		})
 	}
@@ -71,17 +71,45 @@ export class SearchBarComponent implements OnInit, AfterViewInit {
 	get searchControl() {
 		return this.searchService.searchControl
 	}
-	get instrument() {
-		return this.searchService.instrument.value
+
+	get selectedInstruments() {
+		return this.searchService.instruments.value || [null]
 	}
+
 	get searchLoading() {
 		return this.searchService.searchLoading
 	}
-	setInstrument(instrument: Instrument | null, event: MouseEvent) {
-		this.searchService.instrument.setValue(instrument)
+
+	toggleInstrument(instrument: Instrument | null, event: MouseEvent) {
+		const currentInstruments = [...this.selectedInstruments]
+		
+		if (currentInstruments.includes(instrument)) {
+			// Remove the instrument if already selected
+			const newInstruments = currentInstruments.filter(i => i !== instrument)
+			this.searchService.instruments.setValue(newInstruments.length ? newInstruments : [null])
+		} else {
+			// Add the instrument
+			// Remove null/Any if it exists and we're adding a specific instrument
+			let newInstruments = instrument !== null ? 
+				currentInstruments.filter(i => i !== null) : [null]
+			
+			// If we're adding "Any", clear other selections
+			if (instrument === null) {
+				newInstruments = [null]
+			} else {
+				newInstruments.push(instrument)
+			}
+			
+			this.searchService.instruments.setValue(newInstruments)
+		}
+		
 		if (event.target instanceof HTMLElement) {
 			event.target.parentElement?.parentElement?.blur()
 		}
+	}
+
+	isInstrumentSelected(instrument: Instrument | null): boolean {
+		return this.selectedInstruments.includes(instrument)
 	}
 
 	get difficulty() {
@@ -139,35 +167,43 @@ export class SearchBarComponent implements OnInit, AfterViewInit {
 	}
 
 	updateDisabledControls() {
-		const isDrums = this.searchService.instrument.value === 'drums'
-		const isAny = this.searchService.instrument.value === null
-		const explanation = 'Not available for the current instrument.'
+		const selectedInstruments = this.selectedInstruments
+		const hasDrums = selectedInstruments.includes('drums')
+		const hasNonDrums = selectedInstruments.some(i => i !== 'drums' && i !== null)
+		const isAny = selectedInstruments.includes(null)
+		const explanation = 'Not available for the current instrument selection.'
 
-		this.hasForcedNotes.nativeElement.disabled = isDrums && !isAny
-		this.hasOpenNotes.nativeElement.disabled = isDrums && !isAny
-		this.hasTapNotes.nativeElement.disabled = isDrums && !isAny
-		this.hasRollLanes.nativeElement.disabled = !isDrums && !isAny
-		this.has2xKick.nativeElement.disabled = !isDrums && !isAny
-
-		this.hasForcedNotes.nativeElement.title = isDrums && !isAny ? explanation : ''
-		this.hasOpenNotes.nativeElement.title = isDrums && !isAny ? explanation : ''
-		this.hasTapNotes.nativeElement.title = isDrums && !isAny ? explanation : ''
-		this.hasRollLanes.nativeElement.title = !isDrums && !isAny ? explanation : ''
-		this.has2xKick.nativeElement.title = !isDrums && !isAny ? explanation : ''
-
+		// Enable drum controls if drums are selected
+		this.hasRollLanes.nativeElement.disabled = !hasDrums && !isAny
+		this.has2xKick.nativeElement.disabled = !hasDrums && !isAny
+		
+		// Enable non-drum controls if non-drum instruments are selected
+		this.hasForcedNotes.nativeElement.disabled = !hasNonDrums && !isAny
+		this.hasOpenNotes.nativeElement.disabled = !hasNonDrums && !isAny
+		this.hasTapNotes.nativeElement.disabled = !hasNonDrums && !isAny
+		
+		// Set titles
+		this.hasRollLanes.nativeElement.title = !hasDrums && !isAny ? explanation : ''
+		this.has2xKick.nativeElement.title = !hasDrums && !isAny ? explanation : ''
+		this.hasForcedNotes.nativeElement.title = !hasNonDrums && !isAny ? explanation : ''
+		this.hasOpenNotes.nativeElement.title = !hasNonDrums && !isAny ? explanation : ''
+		this.hasTapNotes.nativeElement.title = !hasNonDrums && !isAny ? explanation : ''
+		
+		// Reset values as needed
 		if (!isAny) {
-			if (isDrums) {
+			if (!hasDrums) {
+				this.advancedSearchForm.get('hasRollLanes')?.setValue(null)
+				this.advancedSearchForm.get('has2xKick')?.setValue(null)
+				this.hasRollLanes.nativeElement.indeterminate = true
+				this.has2xKick.nativeElement.indeterminate = true
+			}
+			if (!hasNonDrums) {
 				this.advancedSearchForm.get('hasForcedNotes')?.setValue(null)
 				this.advancedSearchForm.get('hasOpenNotes')?.setValue(null)
 				this.advancedSearchForm.get('hasTapNotes')?.setValue(null)
 				this.hasForcedNotes.nativeElement.indeterminate = true
 				this.hasOpenNotes.nativeElement.indeterminate = true
 				this.hasTapNotes.nativeElement.indeterminate = true
-			} else {
-				this.advancedSearchForm.get('hasRollLanes')?.setValue(null)
-				this.advancedSearchForm.get('has2xKick')?.setValue(null)
-				this.hasRollLanes.nativeElement.indeterminate = true
-				this.has2xKick.nativeElement.indeterminate = true
 			}
 		}
 	}
@@ -233,7 +269,7 @@ export class SearchBarComponent implements OnInit, AfterViewInit {
 		this.startValidation = true
 		if (this.advancedSearchForm.valid && !this.searchService.searchLoading) {
 			this.searchService.advancedSearch({
-				instrument: this.instrument,
+				instruments: this.selectedInstruments,
 				difficulty: this.difficulty,
 				drumType: this.drumType,
 				drumsReviewed: this.drumsReviewed,
